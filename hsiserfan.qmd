@@ -1,0 +1,446 @@
+---
+title: "hsiserfan"
+---
+
+## library
+
+```{r}
+library(MASS)
+library(tidyverse)
+library(tidyr)
+library(caret)
+library(leaps)
+library(randomForest)
+library(e1071)
+```
+
+## load
+
+```{r}
+load(file = "C:/Users/omid rayaneh/Desktop/hsis151617/veh_acc_road_201567.RData")
+df <- veh_acc_road_201567
+```
+
+## select
+
+```{r}
+df2 <- df %>% 
+  filter(VEHTYPE == 'Bicycle')
+
+df2 <- df %>% select( "drv_age", "DRV_SEX", "HOUR_class", "SEVERITY", "RDSURF", "LIGHT", "numvehs", "NO_LANES", "SURF_TYP", "MED_TYPE", "PHYSCOND","VIOL", "CONTRIB1", "WEATHER1", "RDSURF" , "VEHTYPE")
+
+df3 <- na.omit(df2)
+```
+
+```{r}
+library(ggplot2)
+
+# Create a bar plot
+ggplot(df3, aes(x = drv_age, fill = SEVERITY)) +
+  geom_bar() +
+  labs(x = "Driver Age", y = "Count", fill = "Severity") +
+  ggtitle("Distribution of Driver Age by Severity") +
+  theme_minimal()
+```
+
+**Age**
+
+```{r}
+group_age <- function(age) {
+  if (age >= 16 && age <= 25) {
+    return('young')
+  } else if (age > 25 && age <= 65) {
+    return('adult')
+  } else {
+    return('older')
+  }
+}
+df3$age_group <- sapply(df3$drv_age, group_age)
+list_of_age_groups <- split(df3, df3$age_group)
+
+
+accidents_by_age_group <- table(df3$age_group)
+
+print(accidents_by_age_group)
+```
+
+```{r}
+library(ggplot2)
+
+# Assuming df3 is your data frame with the age_group variable
+
+# Create a bar plot
+ggplot(df3, aes(x = age_group)) +
+  geom_bar(fill = "blue") +
+  labs(x = "Age Group", y = "Count") +
+  ggtitle("Distribution of Age Groups") +
+  theme_minimal()
+```
+
+**model**
+
+1-RANDOM FOREST
+
+```{r}
+library(randomForest)
+
+df3$SEVERITY <- as.factor(df3$SEVERITY)
+
+set.seed(123)
+rf_model <- randomForest(SEVERITY ~ ., data = df3, importance = TRUE)
+
+var_importance <- importance(rf_model)
+
+top_variables <- rownames(var_importance)[order(var_importance[, "MeanDecreaseGini"], decreasing = TRUE)][1:10]
+
+formula <- as.formula(paste("SEVERITY ~", paste(top_variables, collapse = " + ")))
+
+models_list <- list()
+r2_values <- numeric()
+
+for (i in seq_along(list_of_age_groups)) {
+  df <- list_of_age_groups[[i]]
+  
+  if (all(top_variables %in% names(df))) {
+    if (!is.factor(df$SEVERITY)) {
+      df$SEVERITY <- as.factor(df$SEVERITY)
+    }
+    model <- randomForest(formula, data = df, importance = TRUE)
+    models_list[[i]] <- model
+    
+    oob_error_rate <- model$err.rate[1]
+    r2_values[i] <- 1 - oob_error_rate
+  } else {
+    models_list[[i]] <- NULL
+    r2_values[i] <- NA
+  }
+}
+
+print(r2_values)
+
+print(models_list)
+```
+
+```{r}
+library(randomForest)
+library(ggplot2)
+
+# تبدیل متغیرهای رشته به فاکتور
+df3$SEVERITY <- as.factor(df3$SEVERITY)
+
+# تعیین تعداد تصادفی برای اجرای الگوریتم تصادفی با دقت یکسان
+set.seed(123)
+
+# آموزش مدل رندوم فارست اصلی
+rf_model <- randomForest(SEVERITY ~ ., data = df3, importance = TRUE)
+
+# استخراج اهمیت ویژگی‌ها
+var_importance <- importance(rf_model)
+top_variables <- rownames(var_importance)[order(var_importance[, "MeanDecreaseGini"], decreasing = TRUE)][1:10]
+
+# تابع برای آموزش مدل و چاپ نتایج
+train_and_print_model <- function(df, formula) {
+  if (!is.factor(df$SEVERITY)) {
+    df$SEVERITY <- as.factor(df$SEVERITY)
+  }
+  
+  model <- randomForest(formula, data = df, importance = TRUE)
+  
+  oob_error_rate <- model$err.rate[1]
+  r2_value <- 1 - oob_error_rate
+  
+  print(paste("R-squared:", r2_value))
+  print(summary(model))
+  
+  plot(model, main = "Random Forest Model")
+  
+  return(list(model = model, r2_value = r2_value))
+}
+
+# آموزش مدل برای هر گروه سنی و چاپ نتایج
+models_and_r2 <- lapply(list_of_age_groups, function(df) {
+  if (all(top_variables %in% names(df))) {
+    formula <- as.formula(paste("SEVERITY ~", paste(top_variables, collapse = " + ")))
+    train_and_print_model(df, formula)
+  } else {
+    print("Some variables are missing in the dataset.")
+    return(NULL)
+  }
+})
+
+# نمایش لیست مدل‌ها
+print(models_and_r2)
+
+```
+
+```{r}
+# Assuming the random forest results are stored in a variable called 'models_list'
+for (i in seq_along(models_list)) {
+  print(i)
+  print(models_list[[i]])
+}
+
+# Using knitr::kable() to display the table
+for (i in seq_along(models_list)) {
+  print(i)
+  print(knitr::kable(models_list[[i]]$confusion, caption = paste("Model", i, "Confusion Matrix")))
+}
+```
+
+2-SVM (best model)
+
+```{r}
+df3$SEVERITY <- as.factor(df3$SEVERITY)
+formula <- as.formula(paste("SEVERITY ~", paste(top_variables, collapse = " + ")))
+
+models_list <- list()
+accuracy_values <- numeric()
+
+for (i in seq_along(list_of_age_groups)) {
+  df <- list_of_age_groups[[i]]
+  
+  if (all(top_variables %in% names(df))) {
+    if (!is.factor(df$SEVERITY)) {
+      df$SEVERITY <- as.factor(df$SEVERITY)
+    }
+    model <- svm(formula, data = df)
+    models_list[[i]] <- model
+    
+    predicted_labels <- predict(model, newdata = df)
+    true_labels <- df$SEVERITY
+    accuracy_values[i] <- sum(predicted_labels == true_labels) / length(true_labels)
+  } else {
+    models_list[[i]] <- NULL
+    accuracy_values[i] <- NA
+  }
+}
+
+print(accuracy_values)
+
+print(models_list)
+```
+
+```{r}
+# Assuming the R-squared values are stored in a variable called 'r_squared_values'
+r_squared_values <- c(0.4830054, 0.4444444, 0.4463519)
+
+# Creating a data frame to store the information
+table_data <- data.frame(
+  Model = 1:length(r_squared_values),
+  R_squared = r_squared_values,
+  SVM_Type = character(length(r_squared_values)),
+  SVM_Kernel = character(length(r_squared_values)),
+  Cost = numeric(length(r_squared_values)),
+  Num_Support_Vectors = numeric(length(r_squared_values))
+)
+
+# Assigning values to additional columns
+table_data$SVM_Type <- "C-classification"
+table_data$SVM_Kernel <- "radial"
+table_data$Cost <- 1
+table_data$Num_Support_Vectors <- c(1965, 95, 1094)
+
+# Printing the table
+print(table_data)
+```
+
+```{r}
+library(ggplot2)
+
+df3$SEVERITY <- as.factor(df3$SEVERITY)
+
+formula <- as.formula(paste("SEVERITY ~", paste(top_variables, collapse = " + ")))
+
+models_list <- list()
+accuracy_values <- numeric()
+
+for (i in seq_along(list_of_age_groups)) {
+  df <- list_of_age_groups[[i]]
+  
+  if (all(top_variables %in% names(df))) {
+    if (!is.factor(df$SEVERITY)) {
+      df$SEVERITY <- as.factor(df$SEVERITY)
+    }
+    model <- svm(formula, data = df)
+    models_list[[i]] <- model
+    
+    predicted_labels <- predict(model, newdata = df)
+    true_labels <- df$SEVERITY
+    accuracy_values[i] <- sum(predicted_labels == true_labels) / length(true_labels)
+  } else {
+    models_list[[i]] <- NULL
+    accuracy_values[i] <- NA
+  }
+}
+
+# Create a data frame for plotting
+plot_data <- data.frame(Age_Group = seq_along(list_of_age_groups),
+                        Accuracy = accuracy_values)
+
+# Create the bar plot
+ggplot(plot_data, aes(x = Age_Group, y = Accuracy)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(x = "Age Group", y = "Accuracy", title = "Accuracy of SVM Models by Age Group")
+```
+
+3-RANDOM FOREST
+
+```{r}
+library(randomForest)
+
+df3$SEVERITY <- as.factor(df3$SEVERITY)
+
+set.seed(123)
+rf_model <- randomForest(SEVERITY ~ ., data = df3, importance = TRUE)
+
+var_importance <- importance(rf_model)
+
+top_variables <- rownames(var_importance)[order(var_importance[, "MeanDecreaseGini"], decreasing = TRUE)][1:10]
+
+formula <- as.formula(paste("SEVERITY ~", paste(top_variables, collapse = " + ")))
+
+rf_model_top_variables <- randomForest(formula, data = df3, importance = TRUE)
+
+print(rf_model_top_variables)
+
+plot(rf_model_top_variables)
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(viridis)
+
+# ایجاد چارچوب داده جدید برای مهمیت متغیرها
+importance_df <- var_importance %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Variable") %>%
+  arrange(desc(MeanDecreaseGini)) %>%
+  slice(1:10)
+
+# نمودار مهمیت متغیرها
+ggplot(importance_df, aes(x = reorder(Variable, MeanDecreaseGini), y = MeanDecreaseGini, fill = Variable)) +
+  geom_bar(stat = "identity") +
+  scale_fill_viridis(discrete = TRUE) +
+  labs(x = "Variable", y = "Importance", fill = "Variable") +
+  ggtitle("Variable Importance in Random Forest Model") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip()
+```
+
+```{r}
+# بارگیری کتابخانه ggplot2 در صورتی که از قبل بارگیری نشده است
+if (!require(ggplot2)) {
+  install.packages("ggplot2")
+  library(ggplot2)
+}
+
+# ساخت نمودار توصیفی
+ggplot(df3, aes(x = drv_age, fill = SEVERITY)) +
+  geom_bar() +
+  labs(x = "Driver Age", y = "Count", fill = "Severity") +
+  ggtitle("Distribution of Driver Age by Severity") +
+  theme_minimal()
+```
+
+**4-random forest whit cross validation 6 folds**
+
+```{r}
+library(randomForest)
+library(caret)
+
+df3$SEVERITY <- as.factor(df3$SEVERITY)
+
+# Check and exclude variables with only one level
+df3 <- df3[, sapply(df3, function(x) length(unique(x)) > 1)]
+# Set the seed for reproducibility
+set.seed(123)
+
+# Define the formula for the model
+formula <- SEVERITY ~ .
+
+# Create the training control object for 6-fold cross-validation
+ctrl <- trainControl(method = "cv", number = 6)
+
+# Train the Random Forest model using cross-validation
+rf_model <- train(formula, data = df3, method = "rf", trControl = ctrl)
+
+# Print the model results
+print(rf_model)
+
+plot(rf_model)
+```
+
+```{r}
+library(ggplot2)
+library(plyr)
+
+# Perform 6-fold cross-validation and get the results
+cv_results <- train(formula, data = df3, method = "rf", trControl = ctrl, verbose = FALSE)
+
+# Extract the accuracy values for each fold
+accuracy_values <- cv_results$results$Accuracy
+
+# Create a data frame with fold number and accuracy
+fold_accuracy <- data.frame(Fold = 1:6, Accuracy = accuracy_values)
+
+# Create a bar plot of accuracy for each fold
+accuracy_plot <- ggplot(fold_accuracy, aes(x = Fold, y = Accuracy)) +
+  geom_bar(stat = "identity", fill = "green", color = "black") +
+  labs(title = "Accuracy for each Fold", x = "Fold", y = "Accuracy") +
+  theme_minimal()
+
+# Create a table of evaluation metrics for each fold
+eval_table <- ddply(cv_results$resample, .(Resample), function(x) {
+  data.frame(Accuracy = max(x$Accuracy),
+             Sensitivity = max(x$Sensitivity),
+             Specificity = max(x$Specificity))
+})
+
+# Print the accuracy plot and evaluation table
+print(accuracy_plot)
+print(eval_table)
+```
+
+**5-Naive Bayes**
+
+```{r}
+library(e1071)
+library(ggplot2)
+library(plyr)
+
+# Set the seed for reproducibility
+set.seed(123)
+
+# Define the formula for the model
+formula <- SEVERITY ~ .
+
+# Train the Naive Bayes model
+nb_model <- naiveBayes(formula, data = df3)
+
+# Use the trained model to make predictions
+predictions <- predict(nb_model, df3)
+
+# Create a confusion matrix
+confusion_matrix <- table(Actual = df3$SEVERITY, Predicted = predictions)
+
+# Calculate evaluation metrics
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+sensitivity <- confusion_matrix[2, 2] / sum(confusion_matrix[2, ])
+specificity <- confusion_matrix[1, 1] / sum(confusion_matrix[1, ])
+
+# Create a bar plot of actual vs predicted values
+plot_data <- data.frame(Actual = df3$SEVERITY, Predicted = predictions)
+plot <- ggplot(plot_data, aes(x = Actual, fill = Predicted)) +
+  geom_bar(position = "fill") +
+  labs(x = "Actual", y = "Proportion", fill = "Predicted") +
+  ggtitle("Actual vs Predicted Severity") +
+  theme_minimal()
+
+# Print the confusion matrix and evaluation metrics
+print(confusion_matrix)
+print(paste("Accuracy:", accuracy))
+print(paste("Sensitivity:", sensitivity))
+print(paste("Specificity:", specificity))
+print(plot)
+```
